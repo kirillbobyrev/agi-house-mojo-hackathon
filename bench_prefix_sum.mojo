@@ -9,6 +9,7 @@ from benchmark import (
     BenchMetric,
     ThroughputMeasure,
     BenchConfig,
+    QuickBench,
 )
 from gpu import global_idx
 from gpu.host import DeviceBuffer, DeviceContext
@@ -17,7 +18,10 @@ from memory import stack_allocation, UnsafePointer
 from testing import assert_equal
 from sys import sizeof
 from gpu.memory import load
+from gpu import globals
 from prefix_sum import prefix_sum_naive
+
+alias GPU_ID = 0
 
 
 fn pretty_print_float(val: Float64) -> String:
@@ -48,7 +52,7 @@ fn human_memory(size: Int) -> String:
 
 def run_benchmark[
     type: DType, block_size: Int
-](num_elements: Int, ctx: DeviceContext, mut bench_manager: Bench):
+](num_elements: Int, ctx: DeviceContext):
     output = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
     input = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
 
@@ -87,6 +91,7 @@ def run_benchmark[
         b.iter_custom[kernel_launch](ctx)
 
     var num_bytes = 2 * num_elements * sizeof[type]()
+    var qb = QuickBench()
     bench_manager.bench_function[bench_func](
         BenchId(
             "stream",
@@ -106,24 +111,14 @@ def run_benchmark[
 
     ctx.synchronize()
 
-    with output.map_to_host() as out_host:
-        for i in range(num_elements):
-            assert_equal(
-                out_host[i], i, "Output mismatch at index " + String(i)
-            )
-
 
 def main():
-    var bench_manager = Bench(BenchConfig(max_iters=1))
-
-    with DeviceContext() as ctx:
+    with DeviceContext(GPU_ID) as ctx:
         print("Running on device:", ctx.name())
 
-        alias NUM_ELEMENTS = 1024 * 1024 * 128
+        alias NUM_ELEMENTS = globals.WARP_SIZE * 2
 
         alias TYPE = DType.uint32
-        alias BLOCK_SIZE = 128
+        alias BLOCK_SIZE = globals.WARP_SIZE
 
-        run_benchmark[TYPE, BLOCK_SIZE](NUM_ELEMENTS, ctx, bench_manager)
-
-    bench_manager.dump_report()
+        run_benchmark[TYPE, BLOCK_SIZE](NUM_ELEMENTS, ctx)

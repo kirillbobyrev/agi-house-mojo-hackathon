@@ -7,6 +7,7 @@ from gpu.warp import (
     lane_group_sum,
     prefix_sum as warp_prefix_sum,
 )
+from math import floor
 from gpu.sync import barrier
 from bit import log2_floor
 from gpu.block import broadcast as block_broadcast
@@ -184,3 +185,29 @@ fn block_prefix_sum[
         thread_result += warp_prefix
 
     return thread_result
+
+
+fn pretty_print_float(val: Float64) -> String:
+    """This converts the float value to a string, but omits the fractional part
+    if not needed (e.g. prints 2 instead of 2.0).
+    """
+    if Float64(floor(val)) == val:
+        return String(Int(val))
+    return String(val)
+
+
+fn human_memory(size: Int) -> String:
+    alias KB = 1024
+    alias MB = KB * KB
+    alias GB = MB * KB
+
+    if size >= GB:
+        return pretty_print_float(Float64(size) / GB) + "GiB"
+
+    if size >= MB:
+        return pretty_print_float(Float64(size) / MB) + "MiB"
+
+    if size >= KB:
+        return pretty_print_float(Float64(size) / KB) + "KiB"
+
+    return String(size) + "B"

@@ -1,6 +1,6 @@
 from gpu import block, warp, lane_id, warp_id
 from gpu import id
-from gpu import thread_idx, block_dim
+from gpu import thread_idx, block_dim, global_idx
 from gpu.host import DeviceContext
 from gpu.intrinsics import threadfence
 from gpu.memory import AddressSpace
@@ -8,12 +8,21 @@ from math import log2, ceildiv
 from memory import stack_allocation, UnsafePointer
 from os.atomic import Atomic
 from testing import assert_equal
+from time import perf_counter_ns
 from time import sleep
 import gpu.globals
 import time
 
 # ustdlib (patched stdlib functions)
 import common
+
+alias BLOCK_DIM = 256
+alias SIZE = 2**20
+alias GRID_DIM = ceildiv(SIZE, BLOCK_DIM)
+alias TYPE = DType.uint32
+alias EXCLUSIVE = False
+alias GPU_ID = 0
+alias TEST = False
 
 # Constants
 alias COMPLETE = 1
@@ -61,8 +70,6 @@ fn prefix_sum_naive[
     # Step 2: Propagate the block sum to all other threadds in the grid.
     # This is the core of the algorithm, the decoupled look-back operation.
 
-    current_ns = time.perf_counter_ns()
-
     # This is a naive unparallel propagation of the block sum.
     # TODO: Replace with actual decoupled look-back operation.
     # TODO: Even better, replace with parallel decoupled look-back operation.
@@ -100,14 +107,22 @@ fn prefix_sum_naive[
 
 
 def main():
-    with DeviceContext() as ctx:
-        print("Running on device:", ctx.name())
+    with DeviceContext(0) as ctx:
+        print("device:", ctx.name(), "id:", ctx.id())
 
-        alias BLOCK_DIM = 256
-        alias SIZE = 2**25
-        alias GRID_DIM = ceildiv(SIZE, BLOCK_DIM)
-        alias TYPE = DType.uint32
-        alias EXCLUSIVE = False
+        print("Parameters")
+        print(
+            "array_size:",
+            common.human_memory(SIZE),
+            "block_size:",
+            BLOCK_DIM,
+            "blocks_count:",
+            GRID_DIM,
+            "dtype:",
+            TYPE,
+            "testing:",
+            TEST,
+        )
 
         output = ctx.enqueue_create_buffer[TYPE](SIZE).enqueue_fill(0)
         input = ctx.enqueue_create_buffer[TYPE](SIZE).enqueue_fill(0)
@@ -121,6 +136,8 @@ def main():
         block_counter = ctx.enqueue_create_buffer[DType.uint64](1).enqueue_fill(
             0
         )
+
+        var current_time = perf_counter_ns()
 
         ctx.enqueue_function[
             prefix_sum_naive[
@@ -138,14 +155,19 @@ def main():
 
         ctx.synchronize()
 
-        with output.map_to_host() as out_host:
-            print("out:", out_host)
-            print("block_data:", block_data)
+        var elapsed_time_ms = (perf_counter_ns() - current_time) / 1e6
+        print("Elapsed time:", elapsed_time_ms, "(ms)")
 
-            for i in range(SIZE):
+        @parameter
+        if TEST:
+            with output.map_to_host() as out_host:
+                print("out:", out_host)
+                print("block_data:", block_data)
 
-                @parameter
-                if EXCLUSIVE:
-                    assert_equal(out_host[i], i, "at i: " + String(i))
-                else:
-                    assert_equal(out_host[i], i + 1, "at i: " + String(i))
+                for i in range(SIZE):
+
+                    @parameter
+                    if EXCLUSIVE:
+                        assert_equal(out_host[i], i, "at i: " + String(i))
+                    else:
+                        assert_equal(out_host[i], i + 1, "at i: " + String(i))

@@ -20,10 +20,11 @@ from testing import assert_equal
 from sys import sizeof
 from gpu.memory import load
 
-alias NUM_ELEMENTS = 1024 * 1024 * 128
+alias NUM_ELEMENTS = 32
 alias BLOCK_SIZE = 128
 alias TYPE = DType.uint32
-alias SIMD_WIDTH = 8
+alias SIMD_WIDTH = 1
+alias GPU_ID = 0
 
 
 fn pretty_print_float(val: Float64) -> String:
@@ -55,7 +56,7 @@ fn human_memory(size: Int) -> String:
 fn stream_kernel_layout[
     type: DType, width: Int, block_size: Int, layout: Layout
 ](
-    input: LayoutTensor[mut=False, type, layout],
+    input: LayoutTensor[mut=True, type, layout],
     output: LayoutTensor[mut=True, type, layout],
     size: Int,
 ):
@@ -73,23 +74,9 @@ fn stream_kernel_layout[
     output_view.store[width](idx, 0, val)
 
 
-fn stream_kernel_ptr[
-    type: DType, width: Int, block_size: Int
-](
-    input: UnsafePointer[SIMD[type, width]],
-    output: UnsafePointer[SIMD[type, width]],
-    size: Int,
-):
-    var idx = global_idx.x
-    if idx >= size:
-        return
-
-    output[idx] = input[idx]
-
-
 def run_benchmark[
-    type: DType, width: Int, block_size: Int
-](num_elements: Int, ctx: DeviceContext, mut bench_manager: Bench):
+    type: DType, width: Int, block_size: Int, num_elements: Int
+](ctx: DeviceContext, mut bench_manager: Bench):
     input = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
     output = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
 
@@ -100,7 +87,7 @@ def run_benchmark[
     alias layout = Layout.row_major(NUM_ELEMENTS)
 
     input_tensor = LayoutTensor[type, layout](input.unsafe_ptr())
-    output_tensor = LayoutTensor[type, layout](input.unsafe_ptr())
+    output_tensor = LayoutTensor[type, layout](output.unsafe_ptr())
 
     var grid_dim = ceildiv(num_elements, block_size)
 
@@ -115,15 +102,6 @@ def run_benchmark[
             grid_dim=grid_dim,
             block_dim=block_size,
         )
-        """
-        ctx.enqueue_function[stream_kernel_ptr[type, width, block_size]](
-            input,
-            output,
-            ceildiv(num_elements, width),
-            grid_dim=grid_dim,
-            block_dim=block_size,
-        )
-        """
 
     @parameter
     fn bench_func(mut b: Bencher):
@@ -154,24 +132,22 @@ def run_benchmark[
         ThroughputMeasure(BenchMetric.bytes, num_bytes),
     )
 
-    '''
     with output.map_to_host() as out_host:
         print(out_host)
         for i in range(num_elements):
             assert_equal(
                 out_host[i], i, "Output mismatch at index " + String(i)
             )
-    '''
 
 
 def main():
     var bench_manager = Bench(BenchConfig(max_iters=1))
 
-    with DeviceContext() as ctx:
+    with DeviceContext(GPU_ID) as ctx:
         print("Running on device:", ctx.name())
 
-        run_benchmark[TYPE, SIMD_WIDTH, BLOCK_SIZE](
-            NUM_ELEMENTS, ctx, bench_manager
+        run_benchmark[TYPE, SIMD_WIDTH, BLOCK_SIZE, NUM_ELEMENTS](
+            ctx, bench_manager
         )
 
     bench_manager.dump_report()
