@@ -4,6 +4,7 @@ from gpu import thread_idx, block_dim, global_idx
 from gpu.host import DeviceContext
 from gpu.intrinsics import threadfence
 from gpu.memory import AddressSpace
+from layout import Layout, LayoutTensor
 from math import log2, ceildiv
 from memory import stack_allocation, UnsafePointer
 from os.atomic import Atomic
@@ -25,7 +26,8 @@ alias GPU_ID = 0
 alias TEST = False
 
 # Constants
-alias COMPLETE = 1
+alias BLOCK_COMPLETE = 1
+alias PREFIX_COMPLETE = 3
 
 
 fn prefix_sum_naive[
@@ -63,16 +65,13 @@ fn prefix_sum_naive[
         # Store the block sum in shared memory.
         var aggregate_value = per_block_sum << 1
         if block_id == 0:
-            aggregate_value |= COMPLETE
-        block_data[block_id] = aggregate_value
+            aggregate_value |= PREFIX_COMPLETE
         _ = Atomic.store(block_data + block_id, aggregate_value)
 
     # Step 2: Propagate the block sum to all other threadds in the grid.
     # This is the core of the algorithm, the decoupled look-back operation.
 
     # This is a naive unparallel propagation of the block sum.
-    # TODO: Replace with actual decoupled look-back operation.
-    # TODO: Even better, replace with parallel decoupled look-back operation.
     if thread_idx.x == 0:
         if block_id != 0:
             while True:
@@ -82,12 +81,12 @@ fn prefix_sum_naive[
                 var previous_block_aggregate = Atomic.fetch_add(
                     block_data + block_id - 1, 0
                 )
-                if previous_block_aggregate & COMPLETE:
+                if previous_block_aggregate & PREFIX_COMPLETE:
                     complete_block_prefix = previous_block_aggregate >> 1
                     _ = Atomic.store(
                         block_data + block_id,
                         ((per_block_sum + complete_block_prefix) << 1)
-                        | COMPLETE,
+                        | PREFIX_COMPLETE,
                     )
                     break
 
@@ -104,6 +103,87 @@ fn prefix_sum_naive[
         prefix_sum += block_data[block_id - 1] >> 1
 
     output[global_tid] = prefix_sum
+
+
+'''
+fn prefix_sum_vectorized[
+    type: DType,
+    width: Int,
+    block_size: Int,
+    data_layout: Layout,
+    block_storage_layout: Layout,
+    exclusive: Bool = True,
+](
+    input: LayoutTensor[mut=False, type, data_layout],
+    output: LayoutTensor[mut=True, type, data_layout],
+    block_data: UnsafePointer[Scalar[type]],
+    size: Int,
+    block_counter: UnsafePointer[Scalar[DType.uint64]],
+):
+    # Use the atomic block counter to make sure that the blocks responsible for
+    # the tiles at the beginning of the grid, so that the later blocks (that
+    # depend on it) in the grid for sum propagation are not deadlocked.
+    var counter: Scalar[DType.uint64] = 0
+    if thread_idx.x == 0:
+        counter = Atomic.fetch_add(block_counter, 1)
+    block_id = rebind[Int](block.broadcast[
+        type = DType.uint64, width=1, block_size=block_size
+    ](counter))
+
+    # Load a vector from the input.
+    var global_tid = rebind[Int](block_id * block_size + thread_idx.x)
+    var input_view = input.vectorize[width]()
+    var val: SIMD[type, width] = input_view.load[width](global_tid, 0)
+
+    # Step 1: Upsweep: sum the values in each block.
+    var per_block_sum = common.block_sum[
+        type=type,
+        block_size=block_size,
+    ](val)
+
+    if thread_idx.x == 0:
+        # Store the block sum in shared memory.
+        var aggregate_value = per_block_sum << 1
+        if block_id == 0:
+            aggregate_value |= PREFIX_COMPLETE
+        _ = Atomic.store(block_data + block_id, aggregate_value.reduce_add())
+
+    # Step 2: Propagate the block sum to all other threadds in the grid.
+    # This is the core of the algorithm, the decoupled look-back operation.
+
+    # This is a naive unparallel propagation of the block sum.
+    if thread_idx.x == 0:
+        if block_id != 0:
+            while True:
+                # Load the previous block's aggregate value.
+                # TODO: This is not how to load properly, I'm assuming? There
+                # has to be a better way to load.
+                var previous_block_aggregate = Atomic.fetch_add(
+                    block_data + block_id - 1, 0
+                )
+                if previous_block_aggregate & PREFIX_COMPLETE:
+                    complete_block_prefix = previous_block_aggregate >> 1
+                    _ = Atomic.store(
+                        block_data + block_id,
+                        ((per_block_sum + complete_block_prefix) << 1)
+                        | PREFIX_COMPLETE,
+                    )
+                    break
+
+    # Step 3: Downsweep: calculate the prefix sum in each block.
+    var prefix_sum = common.block_prefix_sum[
+        type=type,
+        block_size=block_size,
+        exclusive=exclusive,
+    ](val)
+
+    # TODO: Fetch the block sum from global memory, broadcast it to all threads
+    # and add it to the prefix sum.
+    if block_id > 0:
+        prefix_sum += block_data[block_id - 1] >> 1
+
+    output[global_tid] = prefix_sum
+'''
 
 
 def main():
