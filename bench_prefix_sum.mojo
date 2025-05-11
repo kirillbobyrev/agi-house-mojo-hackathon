@@ -52,7 +52,7 @@ fn human_memory(size: Int) -> String:
 
 def run_benchmark[
     type: DType, block_size: Int
-](num_elements: Int, ctx: DeviceContext):
+](num_elements: Int, ctx: DeviceContext, mut bench_manager: Bench):
     output = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
     input = ctx.enqueue_create_buffer[type](num_elements).enqueue_fill(0)
 
@@ -116,9 +116,13 @@ def main():
     with DeviceContext(GPU_ID) as ctx:
         print("Running on device:", ctx.name())
 
+        var bench_manager = Bench(BenchConfig(max_iters=1))
+
         alias NUM_ELEMENTS = globals.WARP_SIZE * 2
 
         alias TYPE = DType.uint32
         alias BLOCK_SIZE = globals.WARP_SIZE
 
-        run_benchmark[TYPE, BLOCK_SIZE](NUM_ELEMENTS, ctx)
+        run_benchmark[TYPE, BLOCK_SIZE](NUM_ELEMENTS, ctx, bench_manager)
+
+        bench_manager.dump_report()

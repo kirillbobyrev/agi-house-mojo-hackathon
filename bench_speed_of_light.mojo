@@ -71,7 +71,7 @@ fn stream_kernel_layout[
 
     val = rebind[SIMD[type, width]](input_view[idx])
 
-    output_view.store[width](idx, 0, val)
+    output_view.store[width](idx * width, 0, val)
 
 
 def run_benchmark[
