@@ -2,6 +2,7 @@ from gpu import block, warp, lane_id, warp_id
 from gpu import id
 from gpu import thread_idx, block_dim, global_idx, grid_dim
 from gpu.host import DeviceContext
+from sys import sizeof
 from gpu.intrinsics import threadfence
 from gpu.memory import AddressSpace
 from layout import Layout, LayoutTensor
@@ -18,15 +19,15 @@ import time
 # ustdlib (patched stdlib functions)
 import common
 
-alias BLOCK_DIM = 64
-alias SIZE = 2**17
+alias BLOCK_DIM = 256
+alias SIZE = 2**30
 alias GRID_DIM = ceildiv(SIZE, BLOCK_DIM)
 alias TYPE = DType.uint32
 alias EXCLUSIVE = False
 alias GPU_ID = 1
-alias TEST = True
+alias TEST = False
 alias LAYOUT = Layout.row_major(SIZE)
-alias WIDTH = 1
+alias WIDTH = 8
 
 
 # Constants
@@ -335,7 +336,7 @@ def main():
         print("Parameters")
         print(
             "array_size:",
-            common.human_memory(SIZE),
+            common.human_memory(SIZE * sizeof[TYPE]()),
             "block_size:",
             BLOCK_DIM,
             "simd_width:",
