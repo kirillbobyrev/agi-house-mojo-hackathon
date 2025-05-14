@@ -1,7 +1,7 @@
-# Project submission for the AGI House Mojo Hackathon
+# 🏆🥈 Second place project in [AGI House x Modular GPU Kernel Hackathon](https://app.agihouse.org/events/modular-hackathon-20250510)
 
 This project contains a highly efficient implementation of the device-wide
-prefix sum algorithm using Mojo. It won 🏆🥈 second place award at the event.
+prefix sum algorithm using Mojo.
 
 - `prefix_sum.mojo` contains the implementation of the prefix sum algorithm.
 - Mojo stdlib patch to fix `block.reduce` (=> `block.sum` and other functions)
